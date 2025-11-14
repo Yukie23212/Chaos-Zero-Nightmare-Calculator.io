@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Faint Memory Tracker (Persistent & Floating Reset)</title>
+    <title>Faint Memory Tracker Updated#14/11/2025</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f7f9fb;
-            /* Ensure bottom padding is enough for the fixed button */
-            padding-bottom: 7rem; 
+            /* Ensure bottom padding is enough for the fixed button container */
+            padding-bottom: 9rem; 
         }
         .card {
             background-color: #ffffff;
@@ -50,11 +50,11 @@
             opacity: 0;
             pointer-events: none;
         }
-        /* New fixed button style */
-        #floatingResetButton {
+        /* New fixed button container style */
+        #floatingResetContainer {
             position: fixed;
-            bottom: 2rem;
-            right: 2rem;
+            bottom: 1.5rem;
+            right: 1.5rem;
             z-index: 60;
             /* Responsive placement for smaller screens */
             @media (max-width: 640px) {
@@ -63,168 +63,33 @@
                 width: calc(100% - 2rem);
             }
         }
+        /* Ensure buttons stack correctly on small screens */
+        @media (max-width: 640px) {
+            #floatingResetContainer {
+                flex-direction: column-reverse; /* Put the main action button (Red) on bottom */
+            }
+            #floatingResetContainer button {
+                width: 100%;
+                text-align: center;
+            }
+        }
     </style>
 </head>
 <body>
 
-    <!-- Firebase Imports -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
-        // --- GLOBAL FIREBASE/APP VARIABLES ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let db = null;
-        let auth = null;
-        let userId = null;
-        let isFirestoreReady = false;
-        
-        // Expose global variables to the window object for non-module script access
-        window.firebaseData = {
-            db: null,
-            userId: null,
-            isFirestoreReady: false,
-            // Expose the core functions needed by the main script
-            initializeFirestore: initializeFirestore,
-            saveData: saveData,
-            loadData: loadData,
-        };
-
-        // --- FIREBASE INITIALIZATION ---
-
-        async function initializeFirestore() {
-            if (!firebaseConfig) {
-                console.error("Firebase config not found. Data persistence will not work.");
-                return;
-            }
-
-            try {
-                setLogLevel('Debug');
-                
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                
-                await setPersistence(auth, browserLocalPersistence);
-                
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                // Wait for auth state to be confirmed
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        window.firebaseData.userId = userId;
-                        isFirestoreReady = true;
-                        window.firebaseData.isFirestoreReady = true;
-                        window.firebaseData.db = db;
-                        console.log("Firebase initialized. User ID:", userId);
-
-                        // CRITICAL: Call the main app initialization ONLY when ready
-                        if (window.initializeApp) {
-                            window.initializeApp(true);
-                        }
-                    } else {
-                        console.error("Authentication failed.");
-                        // Call initializeApp even if failed, to load default state gracefully
-                        if (window.initializeApp) {
-                            window.initializeApp(false);
-                        }
-                    }
-                });
-
-            } catch (error) {
-                console.error("Error during Firebase initialization:", error);
-                if (window.initializeApp) {
-                    window.initializeApp(false); // Fallback to local default state
-                }
-            }
-        }
-
-        // --- FIRESTORE DATA FUNCTIONS ---
-
-        // Helper to get the correct document reference path for private user data
-        function getDataDocRef() {
-            if (!userId || !db) return null;
-            // Path: /artifacts/{appId}/users/{userId}/calculator_state/state_doc
-            return doc(db, `artifacts/${appId}/users/${userId}/calculator_state`, 'state_doc');
-        }
-
-        /**
-         * Saves the entire characterDatabase and activeSlots to Firestore.
-         * @param {Array} characterDatabase - The current state of all character inputs.
-         * @param {Array} activeSlots - The indices of characters in the 3 active slots.
-         * @param {number} activeSlotIndex - The index of the currently active slot (0, 1, or 2).
-         */
-        function saveData(characterDatabase, activeSlots, activeSlotIndex) {
-            if (!isFirestoreReady) {
-                // If not ready, assume this is before the first successful sign-in, just warn.
-                return;
-            }
-            
-            const docRef = getDataDocRef();
-            if (docRef) {
-                setDoc(docRef, { 
-                    characterDatabase: characterDatabase,
-                    activeSlots: activeSlots,
-                    activeSlotIndex: activeSlotIndex
-                }, { merge: false }) 
-                .catch(error => console.error("Error saving data:", error));
-            }
-        }
-        
-        /**
-         * Loads data from Firestore and returns it.
-         * @returns {Promise<{characterDatabase: Array, activeSlots: Array, activeSlotIndex: number}>}
-         */
-        async function loadData() {
-            if (!isFirestoreReady) {
-                return null;
-            }
-            
-            const docRef = getDataDocRef();
-            if (docRef) {
-                try {
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists()) {
-                        console.log("Data loaded successfully.");
-                        return docSnap.data();
-                    } else {
-                        console.log("No saved data found.");
-                        return null;
-                    }
-                } catch (error) {
-                    console.error("Error loading data:", error);
-                    return null;
-                }
-            }
-            return null;
-        }
-
-        // Start initialization when the module script executes
-        initializeFirestore();
-    </script>
-    
-    <!-- Reset Confirmation Modal -->
     <div id="resetModal" class="modal hidden fixed inset-0 z-[100] flex items-center justify-center bg-gray-900 bg-opacity-75" aria-modal="true" role="dialog">
         <div class="bg-white rounded-xl shadow-2xl p-6 md:p-8 w-11/12 max-w-md transform transition-all">
-            <h3 class="text-2xl font-bold text-gray-800 mb-4">Confirm Reset</h3>
-            <p class="text-gray-600 mb-6">You are about to reset the data for **<span id="modalCharName" class="font-semibold text-indigo-600"></span>**.</p>
+            <h3 id="modalTitle" class="text-2xl font-bold text-gray-800 mb-4">Confirm Reset</h3>
+            <p id="modalMessage" class="text-gray-600 mb-6"></p>
             
-            <div class="space-y-4">
-                <button onclick="resetCharacterInputs('variable')" class="w-full py-3 px-4 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg shadow-md transition duration-150">
-                    Reset Variable Inputs Only (Removals/Duplications)
-                </button>
-                <button onclick="resetCharacterInputs('all')" class="w-full py-3 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg shadow-md transition duration-150">
-                    Reset ALL Inputs (Full Character Reset)
-                </button>
+            <div id="resetOptions" class="space-y-4">
+            </div>
+
+            <div class="mt-4 p-3 bg-gray-50 rounded-lg">
+                <label class="flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
+                    <input type="checkbox" id="skipConfirmationCheckbox" onchange="toggleModalSkip(this.checked)" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                    <span>Don't show this confirmation again.</span>
+                </label>
             </div>
             
             <button onclick="hideResetModal()" class="w-full mt-4 py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg transition duration-150">
@@ -234,7 +99,6 @@
     </div>
 
 
-    <!-- Fixed Navigation Arrows -->
     <div id="navArrowsContainer" class="fixed inset-y-0 pointer-events-none flex justify-center items-center">
         <div class="calculator-wrapper flex justify-between h-full items-center px-4">
             
@@ -254,7 +118,7 @@
     <main class="calculator-wrapper px-4 pt-8">
         <div class="w-full card rounded-xl p-6 md:p-8">
             <h1 class="text-3xl font-extrabold text-gray-800 mb-6 border-b pb-2">CZN Faint Memory Calculator</h1>
-            <p class="text-sm text-gray-500 mb-6">Select a character to view and edit their specific run data. Data is **automatically saved** persistently to your user profile.</p>
+            <p class="text-sm text-gray-500 mb-6">Select a character to view and edit their specific run data. <br> (Please note that which character you selected is not a matter, the result is still the same, just better for tracking.) The value is save on localStorage.</p>
 
             <div id="summaryBar" class="grid grid-cols-3 gap-3 mb-8">
             </div>
@@ -292,10 +156,7 @@
             </div>
 
             <div id="calculatorForm" class="space-y-6">
-                <!-- Inputs rendered here -->
-            </div>
-            
-            <!-- Removed original reset button here -->
+                </div>
             
         </div>
         
@@ -362,20 +223,20 @@
         </div>
     </main>
     
-    <!-- Fixed Character Status Bar -->
     <div id="characterStatus" class="fixed bottom-0 left-0 p-3 bg-gray-800 text-white text-sm font-semibold rounded-tr-lg shadow-2xl z-50">
         Editing: Character Name
     </div>
 
-    <!-- NEW Floating Reset Button -->
-    <button id="floatingResetButton" onclick="showResetModal()" class="py-3 px-6 bg-red-600 hover:bg-red-700 text-white font-bold rounded-full shadow-lg transition duration-150 transform hover:scale-105">
-        Reset Inputs
-    </button>
+    <div id="floatingResetContainer" class="fixed bottom-4 right-4 z-60 space-y-2 flex flex-col items-end"> 
+        <button id="floatingResetButton" onclick="triggerCharacterReset()" class="py-3 px-6 bg-red-600 hover:bg-red-700 text-white font-bold rounded-full shadow-lg transition duration-150 transform hover:scale-105">
+            Reset Active Character
+        </button>
+    </div>
 
 
     <script>
-        // Use a flag to ensure the main script only runs once after Firebase is ready
-        let isAppInitialized = false; 
+        const STORAGE_KEY = 'czn_faint_memory_state';
+        const SKIP_MODAL_KEY = 'czn_skip_reset_confirmation';
 
         const CHARACTER_NAMES = [
             "Luke", "Khalipe", "Magna", "Rin", "Orlea", "Mei Lin", "Veronica", "Renoa", 
@@ -385,9 +246,9 @@
         const NUM_TOTAL_CHARACTERS = CHARACTER_NAMES.length; 
         const NUM_ACTIVE_SLOTS = 3;
 
-        // Variables that will hold state, initialized below.
+        // Variables that will hold state
         let characterDatabase = [];
-        let activeSlots = [0, 1, 2]; // Default: Luke, Khalipe, Magna
+        let activeSlots = [0, 1, 2]; 
         let activeSlotIndex = 0; 
         
         // --- Core Calculation Logic ---
@@ -414,7 +275,7 @@
             return total;
         }
 
-        // --- State Management ---
+        // --- State Initialization and Local Storage Management ---
 
         function getInitialCharacterInputs() {
              return {
@@ -443,41 +304,57 @@
             };
         }
         
-        // Utility to save data to Firestore
+        /**
+         * Saves the current state to the browser's localStorage.
+         */
         function persistData() {
-            if (window.firebaseData && window.firebaseData.isFirestoreReady) {
-                // Save current state before persisting
-                saveCurrentInputs(); 
-                window.firebaseData.saveData(characterDatabase, activeSlots, activeSlotIndex);
+            saveCurrentInputs(); 
+
+            const stateToSave = {
+                characterDatabase: characterDatabase,
+                activeSlots: activeSlots,
+                activeSlotIndex: activeSlotIndex
+            };
+            
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+            } catch (e) {
+                console.error("Error saving state to localStorage:", e);
             }
         }
 
-        async function initializeDatabase(isFirestoreReady) {
-            let loadedData = null;
-
-            if (isFirestoreReady) {
-                loadedData = await window.firebaseData.loadData();
-            }
-
-            if (loadedData) {
-                // Use data loaded from Firestore
-                characterDatabase = loadedData.characterDatabase;
-                activeSlots = loadedData.activeSlots;
-                // Preserve the last active slot index across refreshes
-                activeSlotIndex = loadedData.activeSlotIndex !== undefined ? loadedData.activeSlotIndex : 0;
-            } else {
-                // Initialize default state
-                characterDatabase = [];
-                for (let i = 0; i < NUM_TOTAL_CHARACTERS; i++) {
-                    characterDatabase.push(getInitialCharacterState(CHARACTER_NAMES[i]));
+        /**
+         * Attempts to load state from localStorage, initializing defaults if none is found.
+         */
+        function loadData() {
+            try {
+                const savedState = localStorage.getItem(STORAGE_KEY);
+                if (savedState) {
+                    const data = JSON.parse(savedState);
+                    
+                    if (data.characterDatabase && data.activeSlots) {
+                        characterDatabase = data.characterDatabase;
+                        activeSlots = data.activeSlots;
+                        activeSlotIndex = data.activeSlotIndex !== undefined ? data.activeSlotIndex : 0;
+                        console.log("State loaded from localStorage.");
+                        return;
+                    }
                 }
-                activeSlots = [0, 1, 2];
-                activeSlotIndex = 0;
+            } catch (e) {
+                console.warn("Could not load state from localStorage. Initializing default state.", e);
             }
+            
+            // Initialize default state if loading failed or no data was found
+            characterDatabase = [];
+            for (let i = 0; i < NUM_TOTAL_CHARACTERS; i++) {
+                characterDatabase.push(getInitialCharacterState(CHARACTER_NAMES[i]));
+            }
+            activeSlots = [0, 1, 2];
+            activeSlotIndex = 0;
         }
+
 
         function saveCurrentInputs() {
-            // Check if form elements exist before trying to read them
             if (!document.getElementById('difficultyTier')) return;
             
             const dbIndex = activeSlots[activeSlotIndex];
@@ -487,7 +364,6 @@
                 const el = document.getElementById(id);
                 if (!el) return 0;
                 if (isCheckbox) return el.checked;
-                // Ensure number inputs are read as integers, falling back to 0 if empty
                 return el.type === 'number' ? parseInt(el.value) || 0 : parseInt(el.value);
             };
 
@@ -508,14 +384,11 @@
         
         /**
          * Switches the active slot index and updates the UI.
-         * @param {number} direction - 1 for next slot, -1 for previous slot.
          */
         function switchSlot(direction) {
-            persistData(); // Save current state before switching
+            persistData(); 
 
             let newIndex = activeSlotIndex + direction;
-            
-            // Wrap around logic (0 -> 2, 2 -> 0)
             if (newIndex < 0) {
                 newIndex = NUM_ACTIVE_SLOTS - 1; 
             } else if (newIndex >= NUM_ACTIVE_SLOTS) {
@@ -523,30 +396,26 @@
             }
             
             activeSlotIndex = newIndex;
-            
-            // Update the dropdown selector to reflect the change
             document.getElementById('slotSelector').value = activeSlotIndex;
 
-            // Load and display the new slot's character data
             renderCurrentCharacterInputs();
             calculateAndUpdate();
-            persistData(); // Persist the new active slot index
+            persistData(); 
         }
 
         // Handler for switching between Slot 1, 2, or 3 via dropdown
         function handleSlotSwitch(slotIndexStr) {
-            persistData(); // Save current state before switching
+            persistData(); 
             activeSlotIndex = parseInt(slotIndexStr);
             
-            // Load and display the new slot's character data
             renderCurrentCharacterInputs();
             calculateAndUpdate();
-            persistData(); // Persist the new active slot index
+            persistData(); 
         }
 
         // Handler for selecting a new character from the 23-list into the active slot
         function handleCharacterSelect(newDbIndexStr) {
-            persistData(); // Save current state before switching
+            persistData(); 
             const newDbIndex = parseInt(newDbIndexStr);
             
             activeSlots[activeSlotIndex] = newDbIndex;
@@ -556,22 +425,73 @@
 
             renderCurrentCharacterInputs(); 
             calculateAndUpdate();
-            persistData(); // Persist the new character mapping
+            persistData(); 
         }
 
-        // --- Reset Logic (New Feature) ---
+        // --- Reset Logic (Split Buttons and Modal Skip) ---
+
+        function isModalSkipEnabled() {
+            return localStorage.getItem(SKIP_MODAL_KEY) === 'true';
+        }
+
+        function toggleModalSkip(checked) {
+            localStorage.setItem(SKIP_MODAL_KEY, checked);
+        }
+
+        // Main entry points for floating buttons
+        function triggerCharacterReset() {
+            if (isModalSkipEnabled()) {
+                resetCharacterInputs('all');
+            } else {
+                showCharacterResetModal();
+            }
+        }
+        function triggerGlobalReset() {
+            if (isModalSkipEnabled()) {
+                resetAllCharacters();
+            } else {
+                showGlobalResetModal();
+            }
+        }
         
-        function showResetModal() {
-            const dbIndex = activeSlots[activeSlotIndex];
-            const charName = characterDatabase[dbIndex].name;
-            document.getElementById('modalCharName').textContent = charName;
-            document.getElementById('resetModal').classList.remove('hidden');
-        }
-
         function hideResetModal() {
             document.getElementById('resetModal').classList.add('hidden');
         }
+
+        function showCharacterResetModal() {
+            const dbIndex = activeSlots[activeSlotIndex];
+            const charName = characterDatabase[dbIndex].name;
+            
+            document.getElementById('modalTitle').textContent = `Confirm Reset for ${charName}`;
+            document.getElementById('modalMessage').innerHTML = `You are about to reset the data for **<span class="font-semibold text-indigo-600">${charName}</span>**. Please choose a reset scope.`;
+            
+            document.getElementById('resetOptions').innerHTML = `
+                <button onclick="resetCharacterInputs('variable')" class="w-full py-3 px-4 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg shadow-md transition duration-150">
+                    Reset Variable Inputs Only (Removals/Duplications)
+                </button>
+                <button onclick="resetCharacterInputs('all')" class="w-full py-3 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg shadow-md transition duration-150">
+                    Reset ALL Inputs (Full Character Reset)
+                </button>
+            `;
+            
+            document.getElementById('skipConfirmationCheckbox').checked = isModalSkipEnabled();
+            document.getElementById('resetModal').classList.remove('hidden');
+        }
         
+        function showGlobalResetModal() {
+            document.getElementById('modalTitle').textContent = `Confirm GLOBAL Data Reset`;
+            document.getElementById('modalMessage').innerHTML = `You are about to **PERMANENTLY RESET** the inputs for <span class="font-semibold text-red-600">ALL 23 CHARACTERS</span>. This action cannot be undone.`;
+            
+            document.getElementById('resetOptions').innerHTML = `
+                <button onclick="resetAllCharacters()" class="w-full py-3 px-4 bg-red-800 hover:bg-red-900 text-white font-semibold rounded-lg shadow-md transition duration-150">
+                    CONFIRM: Reset ALL 23 Characters
+                </button>
+            `;
+            
+            document.getElementById('skipConfirmationCheckbox').checked = isModalSkipEnabled();
+            document.getElementById('resetModal').classList.remove('hidden');
+        }
+
         /**
          * Resets inputs for the current active character.
          * @param {string} mode - 'all' or 'variable'.
@@ -582,21 +502,34 @@
             const defaults = getInitialCharacterInputs();
             
             if (mode === 'all') {
-                // Full reset: apply all defaults
                 state.inputs = defaults;
             } else if (mode === 'variable') {
-                // Variable reset: only clear removals/duplications (Section 4)
                 state.inputs.removalsCount = defaults.removalsCount;
                 state.inputs.charCardRemoval = defaults.charCardRemoval;
                 state.inputs.duplicationsCount = defaults.duplicationsCount;
             }
             
             hideResetModal();
-            
-            // Re-render and recalculate based on the new state
             renderCurrentCharacterInputs();
             calculateAndUpdate();
-            persistData(); // Persist the reset state
+        }
+        
+        /**
+         * Resets all inputs for all 23 characters and resets active slots to default.
+         */
+        function resetAllCharacters() {
+            // Reset all 23 character inputs
+            for (let i = 0; i < NUM_TOTAL_CHARACTERS; i++) {
+                characterDatabase[i].inputs = getInitialCharacterInputs();
+            }
+            // Reset active slots back to [Luke, Khalipe, Magna] and Slot 1 active
+            activeSlots = [0, 1, 2];
+            activeSlotIndex = 0;
+            
+            hideResetModal();
+            
+            // Re-initialize to refresh all UI components
+            initializeApp(); 
         }
 
         // --- Calculation and Display Function ---
@@ -635,7 +568,7 @@
             renderCurrentCharacterResults(state);
             updateSummaryDisplay();
             
-            // Automatically save any change to Firestore
+            // Automatically save any change to localStorage
             persistData();
         }
         
@@ -664,7 +597,6 @@
                 option.textContent = name;
                 picker.appendChild(option);
             });
-            // Select the character index currently assigned to the active slot
             picker.value = activeSlots[activeSlotIndex];
         }
 
@@ -683,7 +615,6 @@
                 
                 const isActive = slot === activeSlotIndex ? 'ring-2 ring-indigo-500 ring-offset-2' : '';
 
-                // Update slot selector text
                 slotSelector.options[slot].textContent = `Slot ${slot + 1}: ${state.name}`;
 
                 summaryBar.innerHTML += `
@@ -695,7 +626,6 @@
                     </div>
                 `;
             }
-            // Ensure slot selector is set to the current slot index
             slotSelector.value = activeSlotIndex;
         }
 
@@ -737,8 +667,8 @@
                         <div class="input-group">
                             <label for="difficultyTier" class="block text-sm font-medium text-gray-700 mb-1">Base Difficulty Tier</label>
                             <select id="difficultyTier" onchange="${onChange}">
-                                ${Array.from({ length: 11 }, (_, i) => i + 1).map(tier => 
-                                    `<option value="${tier}" ${inputs.difficultyTier === tier ? 'selected' : ''}>Tier ${tier} ${tier === 1 ? '(Base)' : ''} ${tier === 11 ? '(Max)' : ''}</option>`
+                                ${Array.from({ length: 30 }, (_, i) => i + 1).map(tier => 
+                                    `<option value="${tier}" ${inputs.difficultyTier === tier ? 'selected' : ''}>Tier ${tier} ${tier === 1 ? '(Base)' : ''} ${tier === 30 ? '(Max)' : ''}</option>`
                                 ).join('')}
                             </select>
                         </div>
@@ -761,7 +691,7 @@
                 </div>
 
                 <div class="p-4 border border-blue-200 rounded-xl bg-blue-50">
-                    <h2 class="text-xl font-bold text-blue-800 mb-3">2. Card Acquisitions (Faint Memory)</h2>
+                    <h2 class="text-xl font-bold text-blue-800 mb-3">2. Card Obtained (Faint Memory)</h2>
                     <div class="grid grid-cols-2 gap-4">
                         <div class="input-group">
                             <label for="neutralCards" class="block text-sm font-medium text-gray-700 mb-1">Neutral Cards (+20)</label>
@@ -785,8 +715,9 @@
                 </div>
 
                 <div class="p-4 border border-green-200 rounded-xl bg-green-50">
-                    <h2 class="text-xl font-bold text-green-800 mb-3">3. Epiphanies & Conversions</h2>
-                    <div class="grid grid-cols-3 gap-4">
+                    <h2 class="text-xl font-bold text-green-800 mb-3">3. Epiphanies & Conversions 
+                                <p class="text-xs text-blue-700 mb-4"> All Character Regular Epiphanies always count +0 </p></h2>
+                    <div class="grid grid-cols-3 gap-4">    
                         <div class="input-group">
                             <label for="regEpiphany" class="block text-sm font-medium text-gray-700 mb-1">Reg. Epiphany (+10)</label>
                             <input type="number" id="regEpiphany" min="0" value="${inputs.regEpiphany}" oninput="${onChange}">
@@ -807,8 +738,7 @@
                     <p class="text-xs text-red-700 mb-4">
                         Starting Card Costs (Removals/Duplications): 0, 10, 30, 50, 70
                         <br> Character's Cards (Variable): 20, 30, 50, 70
-						<br> Quick Guide: "Total Removals" is total all Neutral Card that you removed eg. put number like 2, 4
-                    </p>
+						<br> Quick Guide: "Total Removals" is total all Neutral Card that you removed eg. put number like 2, 4 </p>
                     <div class="grid grid-cols-3 gap-4">
                         <div class="input-group">
                             <label for="removalsCount" class="block text-sm font-medium text-gray-700 mb-1">Total Removals</label>
@@ -825,38 +755,23 @@
                     </div>
                 </div>
             `;
-            // Ensure the character picker reflects the current character after re-rendering
             document.getElementById('characterPicker').value = dbIndex;
         }
         
         // --- Initialization ---
 
-        window.initializeApp = async function(isFirestoreReady) {
-            // Only run the initialization sequence once
-            if (isAppInitialized) return;
-            isAppInitialized = true;
-            
-            // 1. Initialize data (load from Firestore if ready, otherwise use default)
-            // This awaits the load and sets characterDatabase, activeSlots, and activeSlotIndex
-            await initializeDatabase(isFirestoreReady);
-            
-            // 2. Set up the UI based on the loaded (or default) state
+        function initializeApp() {
+            loadData();
             populateCharacterPicker();
             renderCurrentCharacterInputs(); 
             updateSummaryDisplay(); 
-            
-            // 3. Final calculation and persist (to ensure initial state is saved if it was default)
             calculateAndUpdate();
-            persistData(); // Final save of the initial loaded state
             
-            console.log("Application fully initialized with persistent data.");
+            // Set the checkbox status on load
+            document.getElementById('skipConfirmationCheckbox').checked = isModalSkipEnabled();
         }
 
-        // Fallback: If the Firebase module script fails to call initializeApp(true),
-        // we use a window.onload fallback to ensure the UI eventually loads a default state.
-        if (!window.firebaseData) {
-            window.onload = () => window.initializeApp(false);
-        }
+        window.onload = initializeApp;
     </script>
 </body>
 </html>
