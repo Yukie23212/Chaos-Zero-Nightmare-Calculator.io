@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CZN Faint Memory Calculator</title>
+    <title>Faint Memory Tracker (Persistent & Floating Reset)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f7f9fb;
-            /* Added padding to prevent fixed footer from covering content */
-            padding-bottom: 4rem; 
+            /* Ensure bottom padding is enough for the fixed button */
+            padding-bottom: 7rem; 
         }
         .card {
             background-color: #ffffff;
@@ -29,31 +29,212 @@
             border-color: #3b82f6;
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
         }
-
-        /* Container for the main content to match the max-w-2xl */
         .calculator-wrapper {
-            max-width: 42rem; /* 672px */
+            max-width: 42rem; 
             width: 100%;
             margin-left: auto;
             margin-right: auto;
         }
-        
-        /* Arrow Container Styling */
         #navArrowsContainer {
-            /* Ensures the container spans the viewport width */
             width: 100vw;
-            /* Center the container horizontally */
             left: 50%;
             transform: translateX(-50%);
-            /* Position top to bottom of the viewport */
             top: 0;
             bottom: 0;
-            z-index: 50; /* Ensure arrows are above the main content */
+            z-index: 50; 
+        }
+        .modal {
+            transition: opacity 0.3s ease-in-out;
+        }
+        .modal.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        /* New fixed button style */
+        #floatingResetButton {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            z-index: 60;
+            /* Responsive placement for smaller screens */
+            @media (max-width: 640px) {
+                bottom: 1rem;
+                right: 1rem;
+                width: calc(100% - 2rem);
+            }
         }
     </style>
 </head>
 <body>
 
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- GLOBAL FIREBASE/APP VARIABLES ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db = null;
+        let auth = null;
+        let userId = null;
+        let isFirestoreReady = false;
+        
+        // Expose global variables to the window object for non-module script access
+        window.firebaseData = {
+            db: null,
+            userId: null,
+            isFirestoreReady: false,
+            // Expose the core functions needed by the main script
+            initializeFirestore: initializeFirestore,
+            saveData: saveData,
+            loadData: loadData,
+        };
+
+        // --- FIREBASE INITIALIZATION ---
+
+        async function initializeFirestore() {
+            if (!firebaseConfig) {
+                console.error("Firebase config not found. Data persistence will not work.");
+                return;
+            }
+
+            try {
+                setLogLevel('Debug');
+                
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                await setPersistence(auth, browserLocalPersistence);
+                
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Wait for auth state to be confirmed
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        window.firebaseData.userId = userId;
+                        isFirestoreReady = true;
+                        window.firebaseData.isFirestoreReady = true;
+                        window.firebaseData.db = db;
+                        console.log("Firebase initialized. User ID:", userId);
+
+                        // CRITICAL: Call the main app initialization ONLY when ready
+                        if (window.initializeApp) {
+                            window.initializeApp(true);
+                        }
+                    } else {
+                        console.error("Authentication failed.");
+                        // Call initializeApp even if failed, to load default state gracefully
+                        if (window.initializeApp) {
+                            window.initializeApp(false);
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error during Firebase initialization:", error);
+                if (window.initializeApp) {
+                    window.initializeApp(false); // Fallback to local default state
+                }
+            }
+        }
+
+        // --- FIRESTORE DATA FUNCTIONS ---
+
+        // Helper to get the correct document reference path for private user data
+        function getDataDocRef() {
+            if (!userId || !db) return null;
+            // Path: /artifacts/{appId}/users/{userId}/calculator_state/state_doc
+            return doc(db, `artifacts/${appId}/users/${userId}/calculator_state`, 'state_doc');
+        }
+
+        /**
+         * Saves the entire characterDatabase and activeSlots to Firestore.
+         * @param {Array} characterDatabase - The current state of all character inputs.
+         * @param {Array} activeSlots - The indices of characters in the 3 active slots.
+         * @param {number} activeSlotIndex - The index of the currently active slot (0, 1, or 2).
+         */
+        function saveData(characterDatabase, activeSlots, activeSlotIndex) {
+            if (!isFirestoreReady) {
+                // If not ready, assume this is before the first successful sign-in, just warn.
+                return;
+            }
+            
+            const docRef = getDataDocRef();
+            if (docRef) {
+                setDoc(docRef, { 
+                    characterDatabase: characterDatabase,
+                    activeSlots: activeSlots,
+                    activeSlotIndex: activeSlotIndex
+                }, { merge: false }) 
+                .catch(error => console.error("Error saving data:", error));
+            }
+        }
+        
+        /**
+         * Loads data from Firestore and returns it.
+         * @returns {Promise<{characterDatabase: Array, activeSlots: Array, activeSlotIndex: number}>}
+         */
+        async function loadData() {
+            if (!isFirestoreReady) {
+                return null;
+            }
+            
+            const docRef = getDataDocRef();
+            if (docRef) {
+                try {
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        console.log("Data loaded successfully.");
+                        return docSnap.data();
+                    } else {
+                        console.log("No saved data found.");
+                        return null;
+                    }
+                } catch (error) {
+                    console.error("Error loading data:", error);
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        // Start initialization when the module script executes
+        initializeFirestore();
+    </script>
+    
+    <!-- Reset Confirmation Modal -->
+    <div id="resetModal" class="modal hidden fixed inset-0 z-[100] flex items-center justify-center bg-gray-900 bg-opacity-75" aria-modal="true" role="dialog">
+        <div class="bg-white rounded-xl shadow-2xl p-6 md:p-8 w-11/12 max-w-md transform transition-all">
+            <h3 class="text-2xl font-bold text-gray-800 mb-4">Confirm Reset</h3>
+            <p class="text-gray-600 mb-6">You are about to reset the data for **<span id="modalCharName" class="font-semibold text-indigo-600"></span>**.</p>
+            
+            <div class="space-y-4">
+                <button onclick="resetCharacterInputs('variable')" class="w-full py-3 px-4 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg shadow-md transition duration-150">
+                    Reset Variable Inputs Only (Removals/Duplications)
+                </button>
+                <button onclick="resetCharacterInputs('all')" class="w-full py-3 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg shadow-md transition duration-150">
+                    Reset ALL Inputs (Full Character Reset)
+                </button>
+            </div>
+            
+            <button onclick="hideResetModal()" class="w-full mt-4 py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg transition duration-150">
+                Cancel
+            </button>
+        </div>
+    </div>
+
+
+    <!-- Fixed Navigation Arrows -->
     <div id="navArrowsContainer" class="fixed inset-y-0 pointer-events-none flex justify-center items-center">
         <div class="calculator-wrapper flex justify-between h-full items-center px-4">
             
@@ -73,7 +254,7 @@
     <main class="calculator-wrapper px-4 pt-8">
         <div class="w-full card rounded-xl p-6 md:p-8">
             <h1 class="text-3xl font-extrabold text-gray-800 mb-6 border-b pb-2">CZN Faint Memory Calculator</h1>
-            <p class="text-sm text-gray-500 mb-6">Select a character to view and edit their specific run data. <br> (Please note that which character you selected is not a matter, the result is still the same, just better for tracking.)</p>
+            <p class="text-sm text-gray-500 mb-6">Select a character to view and edit their specific run data. Data is **automatically saved** persistently to your user profile.</p>
 
             <div id="summaryBar" class="grid grid-cols-3 gap-3 mb-8">
             </div>
@@ -111,7 +292,11 @@
             </div>
 
             <div id="calculatorForm" class="space-y-6">
+                <!-- Inputs rendered here -->
             </div>
+            
+            <!-- Removed original reset button here -->
+            
         </div>
         
         <div class="mt-8 p-6 md:p-8 card rounded-xl">
@@ -129,7 +314,7 @@
                         <ul class="list-disc list-inside ml-4 text-sm text-gray-600">
 							<li>you can use the arrow left or right to switch to other character.</li>
                             <li>Use the "Active Slot" dropdown to select the slot you are currently editing.</li>
-                            <li>Use the "Select Character" dropdown to assign any character to the active slot. Inputs are saved per character. But Reset when you close the browser or close the tab</li>
+                            <li>Use the "Select Character" dropdown to assign any character to the active slot. Inputs are saved per character.</li>
                             <li>The fixed bar at the bottom-left corner of the screen shows the name of the character currently being edited.</li>
                         </ul>
                     </li>
@@ -159,7 +344,7 @@
                         <p class="font-medium"><strong>Faint Memory Calculation (Sections 2, 3, & 4):</strong></p>
                         <ul class="list-disc list-inside ml-4 text-sm text-gray-600">
                             <li>Input the count for all cards, epiphanies, conversions, removals, and duplications acquired during your run.</li>
-                            <li>"Total Removal" mean all Neutral Card that you can buy from shop if you remove any of it put number in the box."</li>
+                            <li>"Total Removal" mean all Neutral Card that you can buy from shop if you remove any of it put number in the box.</li>
                             <li>"Char. Removals" mean all basic card on a character that you removed. put a number in the box if you do remove</li>
                             <li>"Total Duplications" exactly as the name if you dupe 2 then put 2.</li>
                             <li>Variable Cost Mechanics (Section 4):
@@ -177,33 +362,38 @@
         </div>
     </main>
     
+    <!-- Fixed Character Status Bar -->
     <div id="characterStatus" class="fixed bottom-0 left-0 p-3 bg-gray-800 text-white text-sm font-semibold rounded-tr-lg shadow-2xl z-50">
         Editing: Character Name
     </div>
 
+    <!-- NEW Floating Reset Button -->
+    <button id="floatingResetButton" onclick="showResetModal()" class="py-3 px-6 bg-red-600 hover:bg-red-700 text-white font-bold rounded-full shadow-lg transition duration-150 transform hover:scale-105">
+        Reset Inputs
+    </button>
+
+
     <script>
+        // Use a flag to ensure the main script only runs once after Firebase is ready
+        let isAppInitialized = false; 
+
         const CHARACTER_NAMES = [
             "Luke", "Khalipe", "Magna", "Rin", "Orlea", "Mei Lin", "Veronica", "Renoa", 
             "Hugo", "Yuki", "Haru", "Kayron", "Nia", "Selana", "Tressa", "Amir", 
             "Lucas", "Maribell", "Mika", "Beryl", "Cassius", "Rei", "Owen (NTR GOD)"
         ];
-        const NUM_TOTAL_CHARACTERS = CHARACTER_NAMES.length; // 23
+        const NUM_TOTAL_CHARACTERS = CHARACTER_NAMES.length; 
         const NUM_ACTIVE_SLOTS = 3;
 
-        // characterDatabase: Stores the state for all 23 characters (indexed 0-22)
+        // Variables that will hold state, initialized below.
         let characterDatabase = [];
-
-        // activeSlots: Stores the index (0-22) of the character currently loaded in each of the 3 slots.
         let activeSlots = [0, 1, 2]; // Default: Luke, Khalipe, Magna
-
-        // activeSlotIndex: Which of the 3 slots is currently selected for editing (0, 1, or 2)
         let activeSlotIndex = 0; 
-
-        // --- Core Calculation Logic (Updated for two variable cost types) ---
+        
+        // --- Core Calculation Logic ---
 
         function calculateVariableCost(count) {
             if (count <= 0) return 0;
-            // Standard Variable Cost sequence: 0 (1st), 10 (2nd), 30 (3rd), 50 (4th), 70 (5th+), 70...
             const costs = [0, 10, 30, 50, 70];
             let total = 0;
             for (let i = 1; i <= count; i++) {
@@ -215,8 +405,6 @@
 
         function calculateCharRemovalCost(count) {
             if (count <= 0) return 0;
-            // Char. Removal Cost sequence: 20 (1st), 30 (2nd), 50 (3rd), 70 (4th+), 70...
-            // FIXED: Changed array from [0, 20, 30, 50, 70] to [20, 30, 50, 70, 70] to ensure 1st item costs 20 points.
             const costs = [20, 30, 50, 70, 70]; 
             let total = 0;
             for (let i = 1; i <= count; i++) {
@@ -228,64 +416,94 @@
 
         // --- State Management ---
 
+        function getInitialCharacterInputs() {
+             return {
+                difficultyTier: 5,
+                nightmareMode: false,
+                codexModifier: 0,
+                neutralCards: 0,
+                forbiddenCards: 0,
+                monsterCards: 0,
+                monsterCardValue: 80, 
+                regEpiphany: 0,
+                divineEpiphany: 0,
+                cardConversion: 0,
+                removalsCount: 0, 
+                charCardRemoval: 0, 
+                duplicationsCount: 0, 
+            };
+        }
+        
         function getInitialCharacterState(name) {
              return {
                 name: name,
-                inputs: {
-                    difficultyTier: 5,
-                    nightmareMode: false,
-                    codexModifier: 0,
-                    neutralCards: 0,
-                    forbiddenCards: 0,
-                    monsterCards: 0,
-                    monsterCardValue: 80, 
-                    regEpiphany: 0,
-                    divineEpiphany: 0,
-                    cardConversion: 0,
-                    removalsCount: 0,
-                    charCardRemoval: 0,
-                    duplicationsCount: 0,
-                },
+                inputs: getInitialCharacterInputs(),
                 limit: 70,
                 totalPoints: 0,
             };
         }
+        
+        // Utility to save data to Firestore
+        function persistData() {
+            if (window.firebaseData && window.firebaseData.isFirestoreReady) {
+                // Save current state before persisting
+                saveCurrentInputs(); 
+                window.firebaseData.saveData(characterDatabase, activeSlots, activeSlotIndex);
+            }
+        }
 
-        function initializeDatabase() {
-            // Create the initial state for all 23 characters
-            for (let i = 0; i < NUM_TOTAL_CHARACTERS; i++) {
-                characterDatabase.push(getInitialCharacterState(CHARACTER_NAMES[i]));
+        async function initializeDatabase(isFirestoreReady) {
+            let loadedData = null;
+
+            if (isFirestoreReady) {
+                loadedData = await window.firebaseData.loadData();
+            }
+
+            if (loadedData) {
+                // Use data loaded from Firestore
+                characterDatabase = loadedData.characterDatabase;
+                activeSlots = loadedData.activeSlots;
+                // Preserve the last active slot index across refreshes
+                activeSlotIndex = loadedData.activeSlotIndex !== undefined ? loadedData.activeSlotIndex : 0;
+            } else {
+                // Initialize default state
+                characterDatabase = [];
+                for (let i = 0; i < NUM_TOTAL_CHARACTERS; i++) {
+                    characterDatabase.push(getInitialCharacterState(CHARACTER_NAMES[i]));
+                }
+                activeSlots = [0, 1, 2];
+                activeSlotIndex = 0;
             }
         }
 
         function saveCurrentInputs() {
-            // Get the database index of the character currently in the active slot
+            // Check if form elements exist before trying to read them
+            if (!document.getElementById('difficultyTier')) return;
+            
             const dbIndex = activeSlots[activeSlotIndex];
             const inputs = characterDatabase[dbIndex].inputs;
             
-            // Check if form elements exist before reading values
-            if (document.getElementById('difficultyTier')) {
-                const getValue = (id, isCheckbox = false) => {
-                    const el = document.getElementById(id);
-                    if (!el) return 0;
-                    if (isCheckbox) return el.checked;
-                    return parseInt(el.value) || 0;
-                };
+            const getValue = (id, isCheckbox = false) => {
+                const el = document.getElementById(id);
+                if (!el) return 0;
+                if (isCheckbox) return el.checked;
+                // Ensure number inputs are read as integers, falling back to 0 if empty
+                return el.type === 'number' ? parseInt(el.value) || 0 : parseInt(el.value);
+            };
 
-                inputs.difficultyTier = getValue('difficultyTier');
-                inputs.nightmareMode = getValue('nightmareMode', true);
-                inputs.codexModifier = getValue('codexModifier');
-                inputs.neutralCards = getValue('neutralCards');
-                inputs.forbiddenCards = getValue('forbiddenCards');
-                inputs.monsterCards = getValue('monsterCards');
-                inputs.monsterCardValue = getValue('monsterCardValue');
-                inputs.regEpiphany = getValue('regEpiphany');
-                inputs.divineEpiphany = getValue('divineEpiphany');
-                inputs.cardConversion = getValue('cardConversion');
-                inputs.removalsCount = getValue('removalsCount');
-                inputs.charCardRemoval = getValue('charCardRemoval');
-                inputs.duplicationsCount = getValue('duplicationsCount');
-            }
+            inputs.difficultyTier = getValue('difficultyTier');
+            inputs.nightmareMode = getValue('nightmareMode', true);
+            inputs.codexModifier = getValue('codexModifier');
+            inputs.neutralCards = getValue('neutralCards');
+            inputs.forbiddenCards = getValue('forbiddenCards');
+            inputs.monsterCards = getValue('monsterCards');
+            inputs.monsterCardValue = getValue('monsterCardValue');
+            inputs.regEpiphany = getValue('regEpiphany');
+            inputs.divineEpiphany = getValue('divineEpiphany');
+            inputs.cardConversion = getValue('cardConversion');
+            inputs.removalsCount = getValue('removalsCount');
+            inputs.charCardRemoval = getValue('charCardRemoval');
+            inputs.duplicationsCount = getValue('duplicationsCount');
         }
         
         /**
@@ -293,8 +511,8 @@
          * @param {number} direction - 1 for next slot, -1 for previous slot.
          */
         function switchSlot(direction) {
-            saveCurrentInputs();
-            
+            persistData(); // Save current state before switching
+
             let newIndex = activeSlotIndex + direction;
             
             // Wrap around logic (0 -> 2, 2 -> 0)
@@ -310,39 +528,75 @@
             document.getElementById('slotSelector').value = activeSlotIndex;
 
             // Load and display the new slot's character data
-            const dbIndex = activeSlots[activeSlotIndex];
-            document.getElementById('characterPicker').value = dbIndex;
             renderCurrentCharacterInputs();
             calculateAndUpdate();
+            persistData(); // Persist the new active slot index
         }
 
         // Handler for switching between Slot 1, 2, or 3 via dropdown
         function handleSlotSwitch(slotIndexStr) {
-            saveCurrentInputs(); 
+            persistData(); // Save current state before switching
             activeSlotIndex = parseInt(slotIndexStr);
             
-            // Update the Character Picker to show the name currently in the new active slot
-            const dbIndex = activeSlots[activeSlotIndex];
-            document.getElementById('characterPicker').value = dbIndex;
-            
+            // Load and display the new slot's character data
             renderCurrentCharacterInputs();
             calculateAndUpdate();
+            persistData(); // Persist the new active slot index
         }
 
         // Handler for selecting a new character from the 23-list into the active slot
         function handleCharacterSelect(newDbIndexStr) {
-            saveCurrentInputs(); 
+            persistData(); // Save current state before switching
             const newDbIndex = parseInt(newDbIndexStr);
             
-            // Update the active slot to point to the new character index
             activeSlots[activeSlotIndex] = newDbIndex;
 
-            // Update the slot selector text
             const slotSelector = document.getElementById('slotSelector');
             slotSelector.options[activeSlotIndex].textContent = `Slot ${activeSlotIndex + 1}: ${characterDatabase[newDbIndex].name}`;
 
             renderCurrentCharacterInputs(); 
             calculateAndUpdate();
+            persistData(); // Persist the new character mapping
+        }
+
+        // --- Reset Logic (New Feature) ---
+        
+        function showResetModal() {
+            const dbIndex = activeSlots[activeSlotIndex];
+            const charName = characterDatabase[dbIndex].name;
+            document.getElementById('modalCharName').textContent = charName;
+            document.getElementById('resetModal').classList.remove('hidden');
+        }
+
+        function hideResetModal() {
+            document.getElementById('resetModal').classList.add('hidden');
+        }
+        
+        /**
+         * Resets inputs for the current active character.
+         * @param {string} mode - 'all' or 'variable'.
+         */
+        function resetCharacterInputs(mode) {
+            const dbIndex = activeSlots[activeSlotIndex];
+            const state = characterDatabase[dbIndex];
+            const defaults = getInitialCharacterInputs();
+            
+            if (mode === 'all') {
+                // Full reset: apply all defaults
+                state.inputs = defaults;
+            } else if (mode === 'variable') {
+                // Variable reset: only clear removals/duplications (Section 4)
+                state.inputs.removalsCount = defaults.removalsCount;
+                state.inputs.charCardRemoval = defaults.charCardRemoval;
+                state.inputs.duplicationsCount = defaults.duplicationsCount;
+            }
+            
+            hideResetModal();
+            
+            // Re-render and recalculate based on the new state
+            renderCurrentCharacterInputs();
+            calculateAndUpdate();
+            persistData(); // Persist the reset state
         }
 
         // --- Calculation and Display Function ---
@@ -380,22 +634,22 @@
             // 4. Update UI displays
             renderCurrentCharacterResults(state);
             updateSummaryDisplay();
+            
+            // Automatically save any change to Firestore
+            persistData();
         }
         
-        // NEW Function for Guide Toggle (New Feature)
         function toggleGuide() {
             const guideContent = document.getElementById('guideContent');
             const toggleIcon = document.getElementById('toggleIcon');
             const isHidden = guideContent.classList.contains('hidden');
 
             if (isHidden) {
-                // Show content
                 guideContent.classList.remove('hidden');
-                toggleIcon.style.transform = 'rotate(180deg)'; // Arrow points up when open
+                toggleIcon.style.transform = 'rotate(180deg)';
             } else {
-                // Hide content
                 guideContent.classList.add('hidden');
-                toggleIcon.style.transform = 'rotate(0deg)'; // Arrow points down when closed
+                toggleIcon.style.transform = 'rotate(0deg)';
             }
         }
 
@@ -410,7 +664,7 @@
                 option.textContent = name;
                 picker.appendChild(option);
             });
-            // Select the initial character in the active slot
+            // Select the character index currently assigned to the active slot
             picker.value = activeSlots[activeSlotIndex];
         }
 
@@ -427,8 +681,7 @@
                 const totalText = state.totalPoints.toLocaleString();
                 const statusColor = isExceeded ? 'bg-red-50 text-red-600 border-red-300' : 'bg-green-50 text-green-600 border-green-300';
                 
-                // Add a visual indicator to the currently active slot in the summary bar
-                const isActive = slot === activeSlotIndex ? 'ring-2 ring-indigo-500' : '';
+                const isActive = slot === activeSlotIndex ? 'ring-2 ring-indigo-500 ring-offset-2' : '';
 
                 // Update slot selector text
                 slotSelector.options[slot].textContent = `Slot ${slot + 1}: ${state.name}`;
@@ -442,6 +695,8 @@
                     </div>
                 `;
             }
+            // Ensure slot selector is set to the current slot index
+            slotSelector.value = activeSlotIndex;
         }
 
         function renderCurrentCharacterResults(state) {
@@ -454,7 +709,6 @@
             document.getElementById('limitDisplay').textContent = `${state.limit.toLocaleString()} (T${effectiveTier})`;
             document.getElementById('totalPointsDisplay').textContent = state.totalPoints.toLocaleString();
             
-            // Update Character Status Footer (New Feature)
             document.getElementById('characterStatus').textContent = `Editing: ${state.name}`;
 
             if (isExceeded) {
@@ -483,8 +737,8 @@
                         <div class="input-group">
                             <label for="difficultyTier" class="block text-sm font-medium text-gray-700 mb-1">Base Difficulty Tier</label>
                             <select id="difficultyTier" onchange="${onChange}">
-                                ${Array.from({ length: 30 }, (_, i) => i + 1).map(tier => 
-                                    `<option value="${tier}" ${inputs.difficultyTier === tier ? 'selected' : ''}>Tier ${tier} ${tier === 1 ? '(Base)' : ''} ${tier === 30 ? '(Max)' : ''}</option>`
+                                ${Array.from({ length: 11 }, (_, i) => i + 1).map(tier => 
+                                    `<option value="${tier}" ${inputs.difficultyTier === tier ? 'selected' : ''}>Tier ${tier} ${tier === 1 ? '(Base)' : ''} ${tier === 11 ? '(Max)' : ''}</option>`
                                 ).join('')}
                             </select>
                         </div>
@@ -571,19 +825,38 @@
                     </div>
                 </div>
             `;
+            // Ensure the character picker reflects the current character after re-rendering
+            document.getElementById('characterPicker').value = dbIndex;
         }
         
         // --- Initialization ---
 
-        function initializeApp() {
-            initializeDatabase();
+        window.initializeApp = async function(isFirestoreReady) {
+            // Only run the initialization sequence once
+            if (isAppInitialized) return;
+            isAppInitialized = true;
+            
+            // 1. Initialize data (load from Firestore if ready, otherwise use default)
+            // This awaits the load and sets characterDatabase, activeSlots, and activeSlotIndex
+            await initializeDatabase(isFirestoreReady);
+            
+            // 2. Set up the UI based on the loaded (or default) state
             populateCharacterPicker();
-            updateSummaryDisplay(); // Initial text update for slots
-            renderCurrentCharacterInputs(); // Load inputs for the default character
-            calculateAndUpdate(); // Perform initial calculation
+            renderCurrentCharacterInputs(); 
+            updateSummaryDisplay(); 
+            
+            // 3. Final calculation and persist (to ensure initial state is saved if it was default)
+            calculateAndUpdate();
+            persistData(); // Final save of the initial loaded state
+            
+            console.log("Application fully initialized with persistent data.");
         }
 
-        window.onload = initializeApp;
+        // Fallback: If the Firebase module script fails to call initializeApp(true),
+        // we use a window.onload fallback to ensure the UI eventually loads a default state.
+        if (!window.firebaseData) {
+            window.onload = () => window.initializeApp(false);
+        }
     </script>
 </body>
 </html>
